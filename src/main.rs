@@ -8,7 +8,7 @@ use warp::Filter;
 use warp::http::{self, Response, StatusCode};
 use warp::hyper::body::Bytes;
 
-type Db = Arc<Mutex<Option<u32>>>;
+type Db = Arc<Mutex<Option<i64>>>;
 
 #[tokio::main]
 async fn main() {
@@ -89,9 +89,9 @@ fn with_db(db: Db) -> impl Filter<Extract=(Db, ), Error=std::convert::Infallible
     warp::any().map(move || db.clone())
 }
 
-async fn init_time_handler(db: Arc<Mutex<Option<u32>>>, bytes: Bytes) -> Result<http::Result<Response<String>>, warp::Rejection> {
-    let init_time = match bytes_to_u32(bytes) {
-        Ok(u32) => u32,
+async fn init_time_handler(db: Arc<Mutex<Option<i64>>>, bytes: Bytes) -> Result<http::Result<Response<String>>, warp::Rejection> {
+    let init_time = match bytes_to_i64(bytes) {
+        Ok(i64) => i64,
         Err(reply) => return Ok(reply),
     };
     let mut stored_init_time = db.lock().await;
@@ -103,15 +103,15 @@ async fn init_time_handler(db: Arc<Mutex<Option<u32>>>, bytes: Bytes) -> Result<
     Ok(Response::builder().status(StatusCode::OK).body(init_time.to_string()))
 }
 
-async fn init_time_reset_handler(db: Arc<Mutex<Option<u32>>>) -> Result<impl warp::Reply, warp::Rejection> {
+async fn init_time_reset_handler(db: Arc<Mutex<Option<i64>>>) -> Result<impl warp::Reply, warp::Rejection> {
     let mut stored_init_time = db.lock().await;
     *stored_init_time = None;
     Ok(StatusCode::OK)
 }
 
-async fn init_time_force_handler(db: Arc<Mutex<Option<u32>>>, bytes: Bytes) -> Result<impl warp::Reply, warp::Rejection> {
-    let init_time = match bytes_to_u32(bytes) {
-        Ok(u32) => u32,
+async fn init_time_force_handler(db: Arc<Mutex<Option<i64>>>, bytes: Bytes) -> Result<impl warp::Reply, warp::Rejection> {
+    let init_time = match bytes_to_i64(bytes) {
+        Ok(i64) => i64,
         Err(reply) => return Ok(reply),
     };
     let mut stored_init_time = db.lock().await;
@@ -119,7 +119,7 @@ async fn init_time_force_handler(db: Arc<Mutex<Option<u32>>>, bytes: Bytes) -> R
     Ok(Response::builder().status(StatusCode::OK).body(init_time.to_string()))
 }
 
-async fn counter_handler(db: Arc<Mutex<Option<u32>>>) -> Result<impl warp::Reply, warp::Rejection> {
+async fn counter_handler(db: Arc<Mutex<Option<i64>>>) -> Result<impl warp::Reply, warp::Rejection> {
     let mut counter = db.lock().await;
     *counter = match *counter {
         Some(x) => Some(x + 1),
@@ -136,13 +136,13 @@ fn option_to_string<T: fmt::Display>(x: Option<T>) -> String {
     }
 }
 
-fn bytes_to_u32(bytes: Bytes) -> Result<u32, http::Result<Response<String>>> {
+fn bytes_to_i64(bytes: Bytes) -> Result<i64, http::Result<Response<String>>> {
     let body = match std::str::from_utf8(bytes.borrow()) {
         Ok(body) => body,
         Err(utf8_error) => return Err(Response::builder().status(StatusCode::BAD_REQUEST).body(utf8_error.to_string())),
     };
-    let value = match body.parse::<u32>() {
-        Ok(u32) => u32,
+    let value = match body.parse::<i64>() {
+        Ok(i64) => i64,
         Err(parse_int_error) => return Err(Response::builder().status(StatusCode::BAD_REQUEST).body(parse_int_error.to_string())),
     };
     Ok(value)
