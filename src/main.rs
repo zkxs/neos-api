@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::fmt;
 use std::sync::Arc;
 
-use futures::{FutureExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt};
 use tokio::sync::Mutex;
 use warp::Filter;
 use warp::http::{self, Response, StatusCode};
@@ -57,7 +57,7 @@ async fn main() {
         .and_then(counter_handler);
 
     // WEBSOCKET /echo
-    let websocket_test = warp::ws()
+    let echo = warp::ws()
         .and(warp::path("echo"))
         .map(|ws: warp::ws::Ws| {
             // And then our closure will be called when it completes...
@@ -72,13 +72,22 @@ async fn main() {
             })
         });
 
+    // WEBSOCKET /wshello
+    let ws_hello = warp::ws()
+        .and(warp::path("wshello"))
+        .map(|ws: warp::ws::Ws| {
+            // And then our closure will be called when it completes...
+            ws.on_upgrade(websocket_handler)
+        });
+
     let routes = hello
         .or(hello_fallback)
         .or(init_time)
         .or(init_time_force)
         .or(init_time_reset)
         .or(counter)
-        .or(websocket_test);
+        .or(echo)
+        .or(ws_hello);
 
     warp::serve(routes)
         .run(([127, 0, 0, 1], 3030))
@@ -87,6 +96,38 @@ async fn main() {
 
 fn with_db(db: Db) -> impl Filter<Extract=(Db, ), Error=std::convert::Infallible> + Clone {
     warp::any().map(move || db.clone())
+}
+
+async fn websocket_handler(websocket: warp::ws::WebSocket) {
+    let (mut tx, mut rx) = websocket.split();
+
+    println!("websocket connected");
+
+    while let Some(result) = rx.next().await {
+        let message = match result {
+            Ok(message) => {
+                println!("{:?}", message);
+                message
+            }
+            Err(e) => {
+                eprintln!("{:?}", e);
+                break;
+            }
+        };
+        let message = match message.to_str() {
+            Ok(str) => str,
+            Err(e) => {
+                eprintln!("error converting message to string: {:?}", e);
+                continue;
+            }
+        };
+        let message = format!("Hello, {}!", message);
+        match tx.send(warp::ws::Message::text(message)).await {
+            Ok(_) => (),
+            Err(e) => eprintln!("error sending message websocket: {:?}", e),
+        };
+    }
+    println!("websocket disconnected");
 }
 
 async fn init_time_handler(db: Arc<Mutex<Option<i64>>>, bytes: Bytes) -> Result<http::Result<Response<String>>, warp::Rejection> {
@@ -137,11 +178,11 @@ fn option_to_string<T: fmt::Display>(x: Option<T>) -> String {
 }
 
 fn bytes_to_i64(bytes: Bytes) -> Result<i64, http::Result<Response<String>>> {
-    let body = match std::str::from_utf8(bytes.borrow()) {
-        Ok(body) => body,
+    let value = match std::str::from_utf8(bytes.borrow()) {
+        Ok(str) => str,
         Err(utf8_error) => return Err(Response::builder().status(StatusCode::BAD_REQUEST).body(utf8_error.to_string())),
     };
-    let value = match body.parse::<i64>() {
+    let value = match value.parse::<i64>() {
         Ok(i64) => i64,
         Err(parse_int_error) => return Err(Response::builder().status(StatusCode::BAD_REQUEST).body(parse_int_error.to_string())),
     };
