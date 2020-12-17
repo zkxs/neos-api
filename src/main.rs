@@ -1,16 +1,17 @@
-use warp::Filter;
-use warp::hyper::body::Bytes;
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use std::fmt;
 use std::borrow::Borrow;
+use std::fmt;
+use std::sync::Arc;
+
+use futures::{FutureExt, StreamExt};
+use tokio::sync::Mutex;
+use warp::Filter;
 use warp::http::{self, Response, StatusCode};
+use warp::hyper::body::Bytes;
 
 type Db = Arc<Mutex<Option<u32>>>;
 
 #[tokio::main]
 async fn main() {
-
     let counter_db: Db = Arc::new(Mutex::new(None));
     let init_timestamp_db: Db = Arc::new(Mutex::new(None));
 
@@ -55,19 +56,36 @@ async fn main() {
         .and(with_db(counter_db).clone())
         .and_then(counter_handler);
 
+    // WEBSOCKET /echo
+    let websocket_test = warp::ws()
+        .and(warp::path("echo"))
+        .map(|ws: warp::ws::Ws| {
+            // And then our closure will be called when it completes...
+            ws.on_upgrade(|websocket| {
+                // Just echo all messages back...
+                let (tx, rx) = websocket.split();
+                rx.forward(tx).map(|result| {
+                    if let Err(e) = result {
+                        eprintln!("websocket error: {:?}", e);
+                    }
+                })
+            })
+        });
+
     let routes = hello
         .or(hello_fallback)
         .or(init_time)
         .or(init_time_force)
         .or(init_time_reset)
-        .or(counter);
+        .or(counter)
+        .or(websocket_test);
 
     warp::serve(routes)
         .run(([127, 0, 0, 1], 3030))
         .await;
 }
 
-fn with_db(db: Db) -> impl Filter<Extract = (Db,), Error = std::convert::Infallible> + Clone {
+fn with_db(db: Db) -> impl Filter<Extract=(Db, ), Error=std::convert::Infallible> + Clone {
     warp::any().map(move || db.clone())
 }
 
@@ -104,7 +122,7 @@ async fn init_time_force_handler(db: Arc<Mutex<Option<u32>>>, bytes: Bytes) -> R
 async fn counter_handler(db: Arc<Mutex<Option<u32>>>) -> Result<impl warp::Reply, warp::Rejection> {
     let mut counter = db.lock().await;
     *counter = match *counter {
-        Some(x) => Some(x+1),
+        Some(x) => Some(x + 1),
         None => Some(0),
     };
     let x = *counter;
