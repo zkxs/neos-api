@@ -48,8 +48,14 @@ async fn main() {
     let init_time_reset = warp::path("initTimeReset")
         .and(warp::post())
         .and(warp::body::content_length_limit(0))
-        .and(with_db(init_timestamp_db))
+        .and(with_db(init_timestamp_db.clone()))
         .and_then(init_time_reset_handler);
+
+    // GET /initTimePeek => 200 OK with body "Some(100)"
+    let init_time_peek = warp::path("initTimePeek")
+        .and(warp::get())
+        .and(with_db(init_timestamp_db))
+        .and_then(init_time_peek_handler);
 
     // GET /counter => 200 OK with body "Some(0)"
     let counter = warp::path("counter")
@@ -57,6 +63,7 @@ async fn main() {
         .and(with_db(counter_db).clone())
         .and_then(counter_handler);
 
+    // GET /systemstat => 200 OK with body containing many system stats
     let systemstat = warp::path("systemstat")
         .and(warp::get())
         .map(get_system_stat);
@@ -91,6 +98,7 @@ async fn main() {
         .or(init_time)
         .or(init_time_force)
         .or(init_time_reset)
+        .or(init_time_peek)
         .or(systemstat)
         .or(counter)
         .or(ws_hello)
@@ -171,6 +179,12 @@ async fn init_time_force_handler(db: Arc<Mutex<Option<i64>>>, bytes: Bytes) -> R
     let mut stored_init_time = db.lock().await;
     *stored_init_time = Some(init_time);
     Ok(Response::builder().status(StatusCode::OK).body(init_time.to_string()))
+}
+
+// handler to peek the init_time without modification
+async fn init_time_peek_handler(db: Arc<Mutex<Option<i64>>>) -> Result<impl warp::Reply, warp::Rejection> {
+    let stored_init_time = db.lock().await;
+    Ok(Response::builder().status(StatusCode::OK).body(option_to_string(*stored_init_time)))
 }
 
 // handler it increment a nullable counter
@@ -314,7 +328,7 @@ fn get_system_stat() -> String {
     };
 
     format!(
-        "{}\n{}\n{}\n{}\n{}{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+        "{}\n{}\n{}\n{}\n{}{}\n{}\n{}\n{}\n{}\n{}\n{}",
         mounts,
         block_device_statistics,
         networks,
