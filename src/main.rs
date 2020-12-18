@@ -16,18 +16,18 @@ async fn main() {
     let init_timestamp_db: Db = Arc::new(Mutex::new(None));
 
     // GET /hello/warp => 200 OK with body "Hello, warp!"
-    let hello = warp::get()
-        .and(warp::path!("hello" / String))
+    let hello = warp::path!("hello" / String)
+        .and(warp::get())
         .map(|name| format!("Hello, {}!", name));
 
     // GET /hello => 200 OK with body "Hello!"
-    let hello_fallback = warp::get()
-        .and(warp::path("hello"))
+    let hello_fallback = warp::path("hello")
+        .and(warp::get())
         .map(|| "Hello!");
 
     // POST /initTime "100" => 200 OK with body "100"
-    let init_time = warp::post()
-        .and(warp::path("initTime"))
+    let init_time = warp::path("initTime")
+        .and(warp::post())
         // Only accept bodies smaller than 16kb...
         .and(warp::body::content_length_limit(1024 * 16))
         .and(with_db(init_timestamp_db.clone()))
@@ -35,8 +35,8 @@ async fn main() {
         .and_then(init_time_handler);
 
     // POST /initTimeForce "100" => 200 OK with body "100"
-    let init_time_force = warp::post()
-        .and(warp::path("initTimeForce"))
+    let init_time_force = warp::path("initTimeForce")
+        .and(warp::post())
         // Only accept bodies smaller than 16kb...
         .and(warp::body::content_length_limit(1024 * 16))
         .and(with_db(init_timestamp_db.clone()))
@@ -44,21 +44,21 @@ async fn main() {
         .and_then(init_time_force_handler);
 
     // POST /initTimeReset => 200 OK
-    let init_time_reset = warp::post()
-        .and(warp::path("initTimeReset"))
+    let init_time_reset = warp::path("initTimeReset")
+        .and(warp::post())
         .and(warp::body::content_length_limit(0))
         .and(with_db(init_timestamp_db))
         .and_then(init_time_reset_handler);
 
     // GET /counter => 200 OK with body "Some(0)"
-    let counter = warp::get()
-        .and(warp::path("counter"))
+    let counter = warp::path("counter")
+        .and(warp::get())
         .and(with_db(counter_db).clone())
         .and_then(counter_handler);
 
     // WEBSOCKET /echo
-    let echo = warp::ws()
-        .and(warp::path("echo"))
+    let echo = warp::path("echo")
+        .and(warp::ws())
         .map(|ws: warp::ws::Ws| {
             // And then our closure will be called when it completes...
             ws.on_upgrade(|websocket| {
@@ -66,16 +66,17 @@ async fn main() {
                 let (tx, rx) = websocket.split();
                 rx.forward(tx).map(|result| {
                     if let Err(e) = result {
-                        eprintln!("websocket error: {:?}", e);
+                        eprintln!("websocket echo error: {:?}", e);
                     }
                 })
             })
         });
 
     // WEBSOCKET /wshello
-    let ws_hello = warp::ws()
-        .and(warp::path("wshello"))
+    let ws_hello = warp::path("wshello")
+        .and(warp::ws())
         .map(|ws: warp::ws::Ws| {
+            println!("incoming wshello connection");
             // And then our closure will be called when it completes...
             ws.on_upgrade(websocket_handler)
         });
@@ -86,8 +87,8 @@ async fn main() {
         .or(init_time_force)
         .or(init_time_reset)
         .or(counter)
-        .or(echo)
-        .or(ws_hello);
+        .or(ws_hello)
+        .or(echo);
 
     warp::serve(routes)
         .run(([127, 0, 0, 1], 3030))
@@ -99,35 +100,37 @@ fn with_db(db: Db) -> impl Filter<Extract=(Db, ), Error=std::convert::Infallible
 }
 
 async fn websocket_handler(websocket: warp::ws::WebSocket) {
+    println!("wshello: handler called");
+
     let (mut tx, mut rx) = websocket.split();
 
-    println!("websocket connected");
+    println!("wshello: connected");
 
     while let Some(result) = rx.next().await {
         let message = match result {
             Ok(message) => {
-                println!("{:?}", message);
+                println!("wshello: received {:?}", message);
                 message
             }
             Err(e) => {
-                eprintln!("{:?}", e);
+                eprintln!("wshello: message error: {:?}", e);
                 break;
             }
         };
         let message = match message.to_str() {
             Ok(str) => str,
             Err(e) => {
-                eprintln!("error converting message to string: {:?}", e);
+                eprintln!("wshello: error converting message to string: {:?}", e);
                 continue;
             }
         };
         let message = format!("Hello, {}!", message);
         match tx.send(warp::ws::Message::text(message)).await {
-            Ok(_) => (),
-            Err(e) => eprintln!("error sending message websocket: {:?}", e),
+            Ok(e) => println!("wshello: sending message: {:?}", e),
+            Err(e) => eprintln!("wshello: error sending message: {:?}", e),
         };
     }
-    println!("websocket disconnected");
+    println!("wshello: disconnected");
 }
 
 async fn init_time_handler(db: Arc<Mutex<Option<i64>>>, bytes: Bytes) -> Result<http::Result<Response<String>>, warp::Rejection> {
