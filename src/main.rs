@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::fmt;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use futures::{FutureExt, SinkExt, StreamExt};
@@ -9,12 +10,14 @@ use warp::Filter;
 use warp::http::{self, Response, StatusCode};
 use warp::hyper::body::Bytes;
 
-type Db = Arc<Mutex<Option<i64>>>;
+type IntegerDb = Arc<Mutex<Option<i64>>>;
 
 #[tokio::main]
 async fn main() {
-    let counter_db: Db = Arc::new(Mutex::new(None));
-    let init_timestamp_db: Db = Arc::new(Mutex::new(None));
+    let proxy_server_address: SocketAddr = ([127, 0, 0, 1], 3030).into();
+
+    let counter_db: IntegerDb = Arc::new(Mutex::new(None));
+    let init_timestamp_db: IntegerDb = Arc::new(Mutex::new(None));
 
     // GET /hello/warp => 200 OK with body "Hello, warp!"
     let hello = warp::path!("hello" / String)
@@ -31,7 +34,7 @@ async fn main() {
         .and(warp::post())
         // Only accept bodies smaller than 16kb...
         .and(warp::body::content_length_limit(1024 * 16))
-        .and(with_db(init_timestamp_db.clone()))
+        .and(with_int_db(init_timestamp_db.clone()))
         .and(warp::body::bytes())
         .and_then(init_time_handler);
 
@@ -40,7 +43,7 @@ async fn main() {
         .and(warp::post())
         // Only accept bodies smaller than 16kb...
         .and(warp::body::content_length_limit(1024 * 16))
-        .and(with_db(init_timestamp_db.clone()))
+        .and(with_int_db(init_timestamp_db.clone()))
         .and(warp::body::bytes())
         .and_then(init_time_force_handler);
 
@@ -48,19 +51,19 @@ async fn main() {
     let init_time_reset = warp::path("initTimeReset")
         .and(warp::post())
         .and(warp::body::content_length_limit(0))
-        .and(with_db(init_timestamp_db.clone()))
+        .and(with_int_db(init_timestamp_db.clone()))
         .and_then(init_time_reset_handler);
 
     // GET /initTimePeek => 200 OK with body "Some(100)"
     let init_time_peek = warp::path("initTimePeek")
         .and(warp::get())
-        .and(with_db(init_timestamp_db))
+        .and(with_int_db(init_timestamp_db))
         .and_then(init_time_peek_handler);
 
     // GET /counter => 200 OK with body "Some(0)"
     let counter = warp::path("counter")
         .and(warp::get())
-        .and(with_db(counter_db).clone())
+        .and(with_int_db(counter_db).clone())
         .and_then(counter_handler);
 
     // GET /systemstat => 200 OK with body containing many system stats
@@ -90,7 +93,7 @@ async fn main() {
         .map(|ws: warp::ws::Ws| {
             println!("incoming wshello connection");
             // And then our closure will be called when it completes...
-            ws.on_upgrade(websocket_handler)
+            ws.on_upgrade(wshello_handler)
         });
 
     let routes = hello
@@ -104,48 +107,49 @@ async fn main() {
         .or(ws_hello)
         .or(echo);
 
+    println!("Starting web server...");
     warp::serve(routes)
-        .run(([127, 0, 0, 1], 3030))
+        .run(proxy_server_address)
         .await;
 }
 
-fn with_db(db: Db) -> impl Filter<Extract=(Db, ), Error=std::convert::Infallible> + Clone {
+fn with_int_db(db: IntegerDb) -> impl Filter<Extract=(IntegerDb, ), Error=std::convert::Infallible> + Clone {
     warp::any().map(move || db.clone())
 }
 
 // wshello handler
-async fn websocket_handler(websocket: warp::ws::WebSocket) {
-    println!("wshello: handler called");
+async fn wshello_handler(websocket: warp::ws::WebSocket) {
+    println!("/wshello: handler called");
 
     let (mut tx, mut rx) = websocket.split();
 
-    println!("wshello: connected");
+    println!("/wshello: connected");
 
     while let Some(result) = rx.next().await {
         let message = match result {
             Ok(message) => {
-                println!("wshello: received {:?}", message);
+                println!("/wshello: received {:?}", message);
                 message
             }
             Err(e) => {
-                eprintln!("wshello: message error: {:?}", e);
+                eprintln!("/wshello: message error: {:?}", e);
                 break;
             }
         };
         let message = match message.to_str() {
             Ok(str) => str,
             Err(e) => {
-                eprintln!("wshello: error converting message to string: {:?}", e);
+                eprintln!("/wshello: error converting message to string: {:?}", e);
                 continue;
             }
         };
         let message = format!("Hello, {}!", message);
         match tx.send(warp::ws::Message::text(message)).await {
-            Ok(e) => println!("wshello: sending message: {:?}", e),
-            Err(e) => eprintln!("wshello: error sending message: {:?}", e),
+            Ok(e) => println!("/wshello: sending message: {:?}", e),
+            Err(e) => eprintln!("/wshello: error sending message: {:?}", e),
         };
     }
-    println!("wshello: disconnected");
+    println!("/wshello: disconnected");
 }
 
 // normal init_time route handler
@@ -154,19 +158,19 @@ async fn init_time_handler(db: Arc<Mutex<Option<i64>>>, bytes: Bytes) -> Result<
         Ok(i64) => i64,
         Err(reply) => return Ok(reply),
     };
-    let mut stored_init_time = db.lock().await;
-    *stored_init_time = match *stored_init_time {
+    let mut stored_init_time_mutex = db.lock().await;
+    *stored_init_time_mutex = match *stored_init_time_mutex {
         Some(x) => Some(x),
         None => Some(init_time),
     };
-    let init_time = stored_init_time.expect("stored_init_time should always be set at this point");
+    let init_time = (*stored_init_time_mutex).expect("stored_init_time should always be set at this point");
     Ok(Response::builder().status(StatusCode::OK).body(init_time.to_string()))
 }
 
 // handler to reset the internal init_time state
 async fn init_time_reset_handler(db: Arc<Mutex<Option<i64>>>) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut stored_init_time = db.lock().await;
-    *stored_init_time = None;
+    let mut stored_init_time_mutex = db.lock().await;
+    *stored_init_time_mutex = None;
     Ok(StatusCode::OK)
 }
 
@@ -176,25 +180,25 @@ async fn init_time_force_handler(db: Arc<Mutex<Option<i64>>>, bytes: Bytes) -> R
         Ok(i64) => i64,
         Err(reply) => return Ok(reply),
     };
-    let mut stored_init_time = db.lock().await;
-    *stored_init_time = Some(init_time);
+    let mut stored_init_time_mutex = db.lock().await;
+    *stored_init_time_mutex = Some(init_time);
     Ok(Response::builder().status(StatusCode::OK).body(init_time.to_string()))
 }
 
 // handler to peek the init_time without modification
 async fn init_time_peek_handler(db: Arc<Mutex<Option<i64>>>) -> Result<impl warp::Reply, warp::Rejection> {
-    let stored_init_time = db.lock().await;
-    Ok(Response::builder().status(StatusCode::OK).body(option_to_string(*stored_init_time)))
+    let stored_init_time_mutex = db.lock().await;
+    Ok(Response::builder().status(StatusCode::OK).body(option_to_string(*stored_init_time_mutex)))
 }
 
 // handler it increment a nullable counter
 async fn counter_handler(db: Arc<Mutex<Option<i64>>>) -> Result<impl warp::Reply, warp::Rejection> {
-    let mut counter = db.lock().await;
-    *counter = match *counter {
+    let mut counter_mutex = db.lock().await;
+    *counter_mutex = match *counter_mutex {
         Some(x) => Some(x + 1),
         None => Some(0),
     };
-    let x = *counter;
+    let x = *counter_mutex;
     Ok(option_to_string(x))
 }
 
@@ -249,17 +253,16 @@ fn get_system_stat() -> String {
         Err(x) => format!("Block devices: error: {}", x.to_string())
     };
 
-    let networks = "Networks: redacted";
-    // match sys.networks() {
-    //     Ok(netifs) => {
-    //         let mut string = String::from("Networks:");
-    //         for netif in netifs.values() {
-    //             string.push_str(format!("\n    {} ({:?})", netif.name, netif.addrs).as_str());
-    //         }
-    //         string
-    //     }
-    //     Err(x) => format!("Networks: error: {}", x)
-    // };
+    let networks = match sys.networks() {
+        Ok(netifs) => {
+            let mut string = String::from("Networks:");
+            for netif in netifs.values() {
+                string.push_str(format!("\n    {} ({:?})", netif.name, netif.addrs).as_str());
+            }
+            string
+        }
+        Err(x) => format!("Networks: error: {}", x)
+    };
 
     let interfaces = match sys.networks() {
         Ok(netifs) => {
