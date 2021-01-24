@@ -14,6 +14,8 @@ type IntegerDb = Arc<Mutex<Option<i64>>>;
 
 #[tokio::main]
 async fn main() {
+    println!("Initializing {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+
     let proxy_server_address: SocketAddr = ([127, 0, 0, 1], 3030).into();
 
     let counter_db: IntegerDb = Arc::new(Mutex::new(None));
