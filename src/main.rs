@@ -1,16 +1,41 @@
+#[macro_use]
+extern crate lazy_static;
+
 use std::borrow::Borrow;
+use std::collections::HashSet;
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use bytes::Buf as _;
 use futures::{FutureExt, SinkExt, StreamExt};
+use hyper::{Body, Client, Uri};
+use hyper_tls::HttpsConnector;
 use systemstat::{self, Platform};
 use tokio::sync::Mutex;
 use warp::Filter;
 use warp::http::{self, Response, StatusCode};
 use warp::hyper::body::Bytes;
 
+use crate::session_dto::Session;
+
+mod session_dto;
+
 type IntegerDb = Arc<Mutex<Option<i64>>>;
+type SessionDb = Arc<Mutex<HashSet<String>>>;
+
+lazy_static! {
+ static ref NEOS_SESSION_URI: Uri = "https://www.neosvr-api.com/api/sessions".parse().expect("Could not parse Neos session API URI");
+}
+
+// world IDs change on republish, so we'll just stick with name checking for now
+const WORLD_NAME_PREFIXES: [&str; 5] = [
+    "MTC",
+    "Metaverse Training",
+    "Neos Hub",
+    "The Avatar Station",
+    "Training"
+];
 
 #[tokio::main]
 async fn main() {
@@ -20,6 +45,7 @@ async fn main() {
 
     let counter_db: IntegerDb = Arc::new(Mutex::new(None));
     let init_timestamp_db: IntegerDb = Arc::new(Mutex::new(None));
+    let session_db: SessionDb = Arc::new(Mutex::new(HashSet::new()));
 
     // GET /hello/warp => 200 OK with body "Hello, warp!"
     let hello = warp::path!("hello" / String)
@@ -36,7 +62,7 @@ async fn main() {
         .and(warp::post())
         // Only accept bodies smaller than 16kb...
         .and(warp::body::content_length_limit(1024 * 16))
-        .and(with_int_db(init_timestamp_db.clone()))
+        .and(with_db(init_timestamp_db.clone()))
         .and(warp::body::bytes())
         .and_then(init_time_handler);
 
@@ -45,7 +71,7 @@ async fn main() {
         .and(warp::post())
         // Only accept bodies smaller than 16kb...
         .and(warp::body::content_length_limit(1024 * 16))
-        .and(with_int_db(init_timestamp_db.clone()))
+        .and(with_db(init_timestamp_db.clone()))
         .and(warp::body::bytes())
         .and_then(init_time_force_handler);
 
@@ -53,25 +79,30 @@ async fn main() {
     let init_time_reset = warp::path("initTimeReset")
         .and(warp::post())
         .and(warp::body::content_length_limit(0))
-        .and(with_int_db(init_timestamp_db.clone()))
+        .and(with_db(init_timestamp_db.clone()))
         .and_then(init_time_reset_handler);
 
     // GET /initTimePeek => 200 OK with body "Some(100)"
     let init_time_peek = warp::path("initTimePeek")
         .and(warp::get())
-        .and(with_int_db(init_timestamp_db))
+        .and(with_db(init_timestamp_db))
         .and_then(init_time_peek_handler);
 
     // GET /counter => 200 OK with body "Some(0)"
     let counter = warp::path("counter")
         .and(warp::get())
-        .and(with_int_db(counter_db).clone())
+        .and(with_db(counter_db).clone())
         .and_then(counter_handler);
 
     // GET /systemstat => 200 OK with body containing many system stats
     let systemstat = warp::path("systemstat")
         .and(warp::get())
         .map(get_system_stat);
+
+    let sessionlist = warp::path("sessionlist")
+        .and(warp::get())
+        .and(with_db(session_db))
+        .and_then(sessionlist_handler);
 
     // WEBSOCKET /echo
     let echo = warp::path("echo")
@@ -105,6 +136,7 @@ async fn main() {
         .or(init_time_reset)
         .or(init_time_peek)
         .or(systemstat)
+        .or(sessionlist)
         .or(counter)
         .or(ws_hello)
         .or(echo);
@@ -115,8 +147,75 @@ async fn main() {
         .await;
 }
 
-fn with_int_db(db: IntegerDb) -> impl Filter<Extract=(IntegerDb, ), Error=std::convert::Infallible> + Clone {
+fn with_db<T: Clone + Send>(db: T) -> impl Filter<Extract=(T, ), Error=std::convert::Infallible> + Clone {
     warp::any().map(move || db.clone())
+}
+
+async fn sessionlist_handler(db: SessionDb) -> Result<impl warp::Reply, warp::Rejection> {
+    let uri = (*NEOS_SESSION_URI).clone();
+    let https = HttpsConnector::new();
+    let client = Client::builder().build::<_, hyper::Body>(https);
+    let response: Response<Body> = match client.get(uri).await {
+        Ok(r) => r,
+        Err(e) => return Ok(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Error reading neos session api response: {:?}", e)))
+    };
+    let sessions = match deserialize_session(response).await {
+        Ok(s) => s,
+        Err(e) => return Ok(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Error parsing neos session api response: {:?}", e)))
+    };
+
+    let sessions = sessions.into_iter()
+        .filter(
+            |s| (WORLD_NAME_PREFIXES.iter().any(|prefix| s.name.starts_with(prefix)))
+                && s.is_valid
+                && !s.has_ended
+                && s.active_users > 0
+                && host_present(s)
+        )
+        .collect::<Vec<Session>>();
+
+    let new_set = sessions.iter()
+        .map(|s| s.session_id.clone())
+        .collect::<HashSet<String>>();
+
+    let mut session_db_mutex = db.lock().await;
+    let notification_needed = new_set.difference(&*session_db_mutex).next().is_some();
+    *session_db_mutex = new_set;
+    drop(session_db_mutex);
+
+    let session_list_string = sessions.into_iter()
+        .map(|s| format!("{} ({})", s.host_username, s.name))
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    let prefix_string = if notification_needed {
+        "N"
+    } else {
+        "X"
+    };
+    let session_list_string = format!("{}{}", prefix_string, session_list_string);
+    Ok(Response::builder().status(StatusCode::OK).body(session_list_string))
+}
+
+fn host_present(session: &Session) -> bool {
+    let users = &session.session_users;
+    if session.host_user_id.is_some() {
+        users.into_iter().any(|u| u.is_present && u.user_id == session.host_user_id)
+    } else {
+        users.into_iter().any(|u| u.is_present && u.username == session.host_username)
+    }
+}
+
+async fn deserialize_session(response: Response<Body>) -> Result<Vec<Session>, String> {
+    let body = match hyper::body::aggregate(response).await {
+        Ok(b) => b,
+        Err(e) => return Err(format!("error aggregating session response body: {:?}", e))
+    };
+    let sessions: Vec<Session> = match serde_json::from_reader(body.reader()) {
+        Ok(s) => s,
+        Err(e) => return Err(format!("error parsing session response body: {:?}", e))
+    };
+    Ok(sessions)
 }
 
 // wshello handler
