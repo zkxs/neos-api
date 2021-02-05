@@ -199,7 +199,7 @@ async fn sessionlist_handler(db: SessionDb) -> Result<impl warp::Reply, warp::Re
         })
         .collect::<Vec<(i64, String)>>();
     // unstable sort is fine as long as no sessions were started in the same millisecond
-    session_list_string.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+    session_list_string.sort_unstable_by(|a, b| b.0.cmp(&a.0));
     let session_list_string = session_list_string
         .into_iter()
         .map(|(_, string)| string)
