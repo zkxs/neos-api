@@ -630,6 +630,7 @@ name = "neos-api"
 version = "0.4.1"
 dependencies = [
  "bytes",
+ "chrono",
  "futures",
  "hyper",
  "hyper-tls",

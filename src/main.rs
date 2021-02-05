@@ -18,6 +18,7 @@ use warp::http::{self, Response, StatusCode};
 use warp::hyper::body::Bytes;
 
 use crate::session_dto::Session;
+use chrono::{Utc, DateTime, TimeZone};
 
 mod session_dto;
 
@@ -183,8 +184,25 @@ async fn sessionlist_handler(db: SessionDb) -> Result<impl warp::Reply, warp::Re
     *session_db_mutex = new_set;
     drop(session_db_mutex);
 
-    let session_list_string = sessions.into_iter()
-        .map(|s| format!("{} ({})", s.host_username, s.name))
+    let current_time = Utc::now();
+
+    let mut session_list_string = sessions.into_iter()
+        .map(|s| {
+            let session_start_time = s.session_begin_time.parse::<DateTime<Utc>>().unwrap_or(Utc.timestamp_millis(0));
+            let uptime = current_time.signed_duration_since(session_start_time);
+
+            // return a tuple so that we can sort this by an i64 later
+            (
+                session_start_time.timestamp_millis(),
+                format!("{} ({}) ({}/{}) {}:{:02}", s.host_username, s.name, s.active_users, s.joined_users, uptime.num_seconds() / 60, uptime.num_seconds() % 60)
+            )
+        })
+        .collect::<Vec<(i64, String)>>();
+    // unstable sort is fine as long as no sessions were started in the same millisecond
+    session_list_string.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+    let session_list_string = session_list_string
+        .into_iter()
+        .map(|(_, string)| string)
         .collect::<Vec<String>>()
         .join("\n");
 
