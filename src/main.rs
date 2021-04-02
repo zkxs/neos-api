@@ -1,33 +1,40 @@
 #[macro_use]
 extern crate lazy_static;
 
+use std::{fmt, fs};
 use std::borrow::Borrow;
-use std::collections::HashSet;
-use std::fmt;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use app_dirs::{AppDataType, AppInfo};
 use bytes::Buf as _;
+use chrono::{DateTime, TimeZone, Utc};
 use futures::{FutureExt, SinkExt, StreamExt};
 use hyper::{Body, Client, Uri};
 use hyper_tls::HttpsConnector;
 use systemstat::{self, Platform};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 use warp::Filter;
 use warp::http::{self, Response, StatusCode};
 use warp::hyper::body::Bytes;
 
-use crate::session_dto::Session;
-use chrono::{Utc, DateTime, TimeZone};
+use crate::dto::session_dto::Session;
+use crate::dto::user_dto::{AbridgedUser, User};
 
-mod session_dto;
+mod dto;
 
 type IntegerDb = Arc<Mutex<Option<i64>>>;
 type SessionDb = Arc<Mutex<HashSet<String>>>;
+type UserCacheDb = Arc<Mutex<HashMap<String, AbridgedUser>>>;
 
 lazy_static! {
  static ref NEOS_SESSION_URI: Uri = "https://www.neosvr-api.com/api/sessions".parse().expect("Could not parse Neos session API URI");
+ static ref CACHE_DIR_FILE_PATH: PathBuf = create_cache_file_path();
 }
+
+const NEOS_USER_URI: &str = "https://www.neosvr-api.com/api/users/";
 
 // world IDs change on republish, so we'll just stick with name checking for now
 const WORLD_NAME_PREFIXES: [&str; 5] = [
@@ -38,6 +45,11 @@ const WORLD_NAME_PREFIXES: [&str; 5] = [
     "Training"
 ];
 
+const APP_INFO: AppInfo = AppInfo {
+    name: env!("CARGO_PKG_NAME"),
+    author: "runtime",
+};
+
 #[tokio::main]
 async fn main() {
     println!("Initializing {} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
@@ -47,6 +59,20 @@ async fn main() {
     let counter_db: IntegerDb = Arc::new(Mutex::new(None));
     let init_timestamp_db: IntegerDb = Arc::new(Mutex::new(None));
     let session_db: SessionDb = Arc::new(Mutex::new(HashSet::new()));
+
+    // attempt to load cache
+    let loaded_cache = fs::read_to_string(CACHE_DIR_FILE_PATH.as_path())
+        .map_err(|e| format!("{:?}", e))
+        .and_then(|string| serde_json::from_str(&string).map_err(|e| format!("{:?}", e)));
+
+    let default_cache = match loaded_cache {
+        Ok(cache) => cache,
+        Err(e) => {
+            eprintln!("failed to load cache, defaulting to empty: {}", e);
+            HashMap::new()
+        }
+    };
+    let user_cache_db: UserCacheDb = Arc::new(Mutex::new(default_cache));
 
     // GET /hello/warp => 200 OK with body "Hello, warp!"
     let hello = warp::path!("hello" / String)
@@ -103,6 +129,7 @@ async fn main() {
     let sessionlist = warp::path("sessionlist")
         .and(warp::get())
         .and(with_db(session_db))
+        .and(with_db(user_cache_db))
         .and_then(sessionlist_handler);
 
     // WEBSOCKET /echo
@@ -152,7 +179,7 @@ fn with_db<T: Clone + Send>(db: T) -> impl Filter<Extract=(T, ), Error=std::conv
     warp::any().map(move || db.clone())
 }
 
-async fn sessionlist_handler(db: SessionDb) -> Result<impl warp::Reply, warp::Rejection> {
+async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<impl warp::Reply, warp::Rejection> {
     let uri = (*NEOS_SESSION_URI).clone();
     let https = HttpsConnector::new();
     let client = Client::builder().build::<_, hyper::Body>(https);
@@ -184,20 +211,36 @@ async fn sessionlist_handler(db: SessionDb) -> Result<impl warp::Reply, warp::Re
     *session_db_mutex = new_set;
     drop(session_db_mutex);
 
+
+    let mut user_cache_mutex = user_cache.lock().await;
     let current_time = Utc::now();
+    let mut session_list_string = Vec::with_capacity(sessions.len());
+    for session in sessions.into_iter() {
+        let session_start_time = session.session_begin_time.parse::<DateTime<Utc>>().unwrap_or(Utc.timestamp_millis(0));
+        let uptime = current_time.signed_duration_since(session_start_time);
+        let user_data_string = match session.host_user_id {
+            Some(user_id) => {
+                match lookup_user_cached(&mut user_cache_mutex, user_id).await {
+                    Ok(user) => {
+                        let registration_date = format!(" {}", format_user_registration_date(&user));
+                        let is_patron = (if user.is_patron { " patron" } else { "" }).to_string();
+                        format!("{}{}", registration_date, is_patron)
+                    }
+                    Err(err) => format!(" {}", err)
+                }
+            }
+            None => String::new(),
+        };
 
-    let mut session_list_string = sessions.into_iter()
-        .map(|s| {
-            let session_start_time = s.session_begin_time.parse::<DateTime<Utc>>().unwrap_or(Utc.timestamp_millis(0));
-            let uptime = current_time.signed_duration_since(session_start_time);
+        // return a tuple so that we can sort this by an i64 later
+        let new_element = (
+            session_start_time.timestamp_millis(),
+            format!("{} ({}) ({}/{}) {}:{:02}{}", session.host_username, session.name, session.active_users, session.joined_users, uptime.num_seconds() / 60, uptime.num_seconds() % 60, user_data_string)
+        );
+        session_list_string.push(new_element);
+    }
+    drop(user_cache_mutex);
 
-            // return a tuple so that we can sort this by an i64 later
-            (
-                session_start_time.timestamp_millis(),
-                format!("{} ({}) ({}/{}) {}:{:02}", s.host_username, s.name, s.active_users, s.joined_users, uptime.num_seconds() / 60, uptime.num_seconds() % 60)
-            )
-        })
-        .collect::<Vec<(i64, String)>>();
     // unstable sort is fine as long as no sessions were started in the same millisecond
     session_list_string.sort_unstable_by(|a, b| b.0.cmp(&a.0));
     let session_list_string = session_list_string
@@ -225,15 +268,10 @@ fn host_present(session: &Session) -> bool {
 }
 
 async fn deserialize_session(response: Response<Body>) -> Result<Vec<Session>, String> {
-    let body = match hyper::body::aggregate(response).await {
-        Ok(b) => b,
-        Err(e) => return Err(format!("error aggregating session response body: {:?}", e))
-    };
-    let sessions: Vec<Session> = match serde_json::from_reader(body.reader()) {
-        Ok(s) => s,
-        Err(e) => return Err(format!("error parsing session response body: {:?}", e))
-    };
-    Ok(sessions)
+    let body = hyper::body::aggregate(response).await
+        .map_err(|e| format!("error aggregating session response body: {:?}", e))?;
+    serde_json::from_reader(body.reader())
+        .map_err(|e| format!("error parsing session response body: {:?}", e))
 }
 
 // wshello handler
@@ -464,4 +502,53 @@ fn get_system_stat() -> String {
         cpu_temp,
         socket_stats
     )
+}
+
+fn format_user_registration_date(user: &AbridgedUser) -> String {
+    match lookup_user_registration_date(user) {
+        Ok(registration_date) => registration_date.date().naive_local().to_string(),
+        Err(error) => error
+    }
+}
+
+fn lookup_user_registration_date(user: &AbridgedUser) -> Result<DateTime<Utc>, String> {
+    user.registration_date.parse::<DateTime<Utc>>()
+        .map_err(|e| format!("parse error: {:?}", e))
+}
+
+async fn lookup_user_cached(cache_mutex: &mut MutexGuard<'_, HashMap<String, AbridgedUser>>, user_id: String) -> Result<AbridgedUser, String> {
+    match cache_mutex.get(&user_id) {
+        Some(user) => {
+            Ok(user.clone())
+        }
+        None => {
+            println!("caching new user {}", user_id);
+            let user: AbridgedUser = lookup_user(&user_id).await?.into();
+            cache_mutex.insert(user_id, user.clone());
+            Ok(user)
+        }
+    }
+}
+
+async fn lookup_user(user_id: &str) -> Result<User, String> {
+    let uri: Uri = format!("{}{}", NEOS_USER_URI, user_id).parse()
+        .map_err(|e| format!("Could not parse Neos user API URI: {:?}", e))?;
+    let https = HttpsConnector::new();
+    let client = Client::builder().build::<_, hyper::Body>(https);
+    let response: Response<Body> = client.get(uri).await
+        .map_err(|e| format!("Could not read Neos user API response body: {:?}", e))?;
+    deserialize_user(response).await
+}
+
+async fn deserialize_user(response: Response<Body>) -> Result<User, String> {
+    let body = hyper::body::aggregate(response).await
+        .map_err(|e| format!("error aggregating user response body: {:?}", e))?;
+    serde_json::from_reader(body.reader())
+        .map_err(|e| format!("error parsing user response body: {:?}", e))
+}
+
+fn create_cache_file_path<'a>() -> PathBuf {
+    let config_dir_path = app_dirs::get_app_root(AppDataType::UserConfig, &APP_INFO).expect("unable to locate configuration directory");
+    fs::create_dir_all(config_dir_path.as_path()).expect("failed to create configuration directory");
+    config_dir_path.join("cache.json")
 }

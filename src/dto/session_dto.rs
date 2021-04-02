@@ -18,7 +18,7 @@ pub struct Session {
     pub headless_host: bool,
     #[serde(rename = "sessionURLs")]
     pub session_urls: Vec<String>,
-    pub session_users: Vec<User>,
+    pub session_users: Vec<SessionUser>,
     pub thumbnail: Option<String>,
     pub joined_users: i32,
     pub active_users: i32,
@@ -42,7 +42,7 @@ pub struct World {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct User {
+pub struct SessionUser {
     pub username: String,
     #[serde(rename = "userID")]
     pub user_id: Option<String>,
