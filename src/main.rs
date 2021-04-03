@@ -128,9 +128,13 @@ async fn main() {
 
     let sessionlist = warp::path("sessionlist")
         .and(warp::get())
-        .and(with_db(session_db))
-        .and(with_db(user_cache_db))
+        .and(with_db(session_db.clone()))
+        .and(with_db(user_cache_db.clone()))
         .and_then(sessionlist_handler);
+
+    let userlist = warp::path("users")
+        .and(warp::get())
+        .and_then(userlist_handler);
 
     // WEBSOCKET /echo
     let echo = warp::path("echo")
@@ -165,6 +169,7 @@ async fn main() {
         .or(init_time_peek)
         .or(systemstat)
         .or(sessionlist)
+        .or(userlist)
         .or(counter)
         .or(ws_hello)
         .or(echo);
@@ -177,6 +182,33 @@ async fn main() {
 
 fn with_db<T: Clone + Send>(db: T) -> impl Filter<Extract=(T, ), Error=std::convert::Infallible> + Clone {
     warp::any().map(move || db.clone())
+}
+
+async fn userlist_handler() -> Result<impl warp::Reply, warp::Rejection> {
+    let uri = (*NEOS_SESSION_URI).clone();
+    let https = HttpsConnector::new();
+    let client = Client::builder().build::<_, hyper::Body>(https);
+    let response: Response<Body> = match client.get(uri).await {
+        Ok(r) => r,
+        Err(e) => return Ok(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Error reading neos session api response: {:?}", e)))
+    };
+    let sessions = match deserialize_session(response).await {
+        Ok(s) => s,
+        Err(e) => return Ok(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Error parsing neos session api response: {:?}", e)))
+    };
+    let mut users = sessions.into_iter()
+        .flat_map(|s| s.session_users.into_iter())
+        .map(|u| {
+            if u.user_id.is_some() {
+                u.username
+            } else {
+                format!("?{}", u.username)
+            }
+        }).collect::<Vec<String>>();
+    users.sort_unstable();
+    users.dedup();
+    let user_list = users.join("\n");
+    Ok(Response::builder().status(StatusCode::OK).body(user_list))
 }
 
 async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<impl warp::Reply, warp::Rejection> {
