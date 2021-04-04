@@ -1,9 +1,15 @@
 # Neos API
 
-This application provides a several utility and testing APIs that I use for various objects in Neos VR. It is still very much a work in progress.
+This application provides a several utility and testing APIs that I use for
+various objects in Neos VR. 
+**It is still very much a work in progress.
+Everything here is subject to change without notice!**
 
 ## Features
-- Simple timestamp storage. Used to measure how long I've been playing Neos and display it in my nameplate.
-- System status query. WIP to get CPU/GPU/Memory usage.
-- Echo websocket. Simple test websocket.
-- Hello websocket. Slightly more elaborate test websocket that demonstrates applying a transform to the input.
+- HTTP GET and WebSocket debug routes
+- New user session list
+- Global public user list
+- Caching to avoid unnecessary hits against the real Neos API.
+
+## API Documentation
+API documentation is available [here](doc/api.md).
