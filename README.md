@@ -11,5 +11,10 @@ Everything here is subject to change without notice!**
 - Global public user list
 - Caching to avoid unnecessary hits against the real Neos API.
 
+## Usage
+1. Download the [latest release](https://github.com/zkxs/neos-api/releases/latest)
+2. Run neos-api.exe from a terminal (command prompt or powershell)
+3. Ctrl+C when you want to kill it. If you didn't start it from a terminal kill it with Task Manager.
+
 ## API Documentation
 API documentation is available [here](doc/api.md).
