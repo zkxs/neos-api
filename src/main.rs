@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use app_dirs::{AppDataType, AppInfo};
 use bytes::Buf as _;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{Datelike, DateTime, Duration, TimeZone, Utc};
 use futures::{FutureExt, SinkExt, StreamExt};
 use hyper::{Body, Client, Uri};
 use hyper_tls::HttpsConnector;
@@ -30,8 +30,12 @@ type SessionDb = Arc<Mutex<HashSet<String>>>;
 type UserCacheDb = Arc<Mutex<HashMap<String, AbridgedUser>>>;
 
 lazy_static! {
- static ref NEOS_SESSION_URI: Uri = "https://www.neosvr-api.com/api/sessions".parse().expect("Could not parse Neos session API URI");
- static ref CACHE_DIR_FILE_PATH: PathBuf = create_cache_file_path();
+    static ref NEOS_SESSION_URI: Uri = "https://www.neosvr-api.com/api/sessions".parse().expect("Could not parse Neos session API URI");
+    static ref CACHE_DIR_FILE_PATH: PathBuf = create_cache_file_path();
+    /// normal user cache expiry time
+    static ref CACHE_EXPIRY_TIME: Duration = Duration::days(30);
+    /// edge case user cache expiry time for when we're at the Patreon renewal time of the month
+    static ref CACHE_EXPIRY_TIME_EDGE_CASE: Duration = Duration::hours(6);
 }
 
 const NEOS_USER_URI: &str = "https://www.neosvr-api.com/api/users/";
@@ -68,7 +72,7 @@ async fn main() {
     let default_cache = match loaded_cache {
         Ok(cache) => cache,
         Err(e) => {
-            eprintln!("failed to load cache, defaulting to empty: {}", e);
+            eprintln!("Failed to load cache from disk; defaulting to empty. This is not a serious problem: {}", e);
             HashMap::new()
         }
     };
@@ -126,12 +130,14 @@ async fn main() {
         .and(warp::get())
         .map(get_system_stat);
 
+    // GET /sessionlist => 200 OK with body containing session list formatted for a specific logix tool
     let sessionlist = warp::path("sessionlist")
         .and(warp::get())
         .and(with_db(session_db.clone()))
         .and(with_db(user_cache_db.clone()))
         .and_then(sessionlist_handler);
 
+    // GET /users => 200 OK with body containing all publicly online users
     let userlist = warp::path("users")
         .and(warp::get())
         .and_then(userlist_handler);
@@ -394,7 +400,7 @@ async fn counter_handler(db: Arc<Mutex<Option<i64>>>) -> Result<impl warp::Reply
 // convert an option to a pretty string
 fn option_to_string<T: fmt::Display>(x: Option<T>) -> String {
     match x {
-        Some(foo) => format!("Some({})", foo.to_string()),
+        Some(value) => format!("Some({})", value.to_string()),
         None => "None".to_string(),
     }
 }
@@ -551,14 +557,46 @@ fn lookup_user_registration_date(user: &AbridgedUser) -> Result<DateTime<Utc>, S
 async fn lookup_user_cached(cache_mutex: &mut MutexGuard<'_, HashMap<String, AbridgedUser>>, user_id: String) -> Result<AbridgedUser, String> {
     match cache_mutex.get(&user_id) {
         Some(user) => {
-            Ok(user.clone())
+            if is_cache_time_valid(&user.cache_time) {
+                return Ok(user.clone());
+            } else {
+                println!("caching expired user {}", user_id);
+            }
         }
         None => {
             println!("caching new user {}", user_id);
-            let user: AbridgedUser = lookup_user(&user_id).await?.into();
-            cache_mutex.insert(user_id, user.clone());
-            Ok(user)
         }
+    };
+
+    // hit real service
+    let user: AbridgedUser = lookup_user(&user_id).await?.abridge(Utc::now());
+    cache_mutex.insert(user_id, user.clone());
+    if let Err(e) = save_cache(cache_mutex) {
+        eprintln!("{}", e);
+    }
+    Ok(user)
+}
+
+//TODO: save cache to disk in the background?
+fn save_cache(cache: &HashMap<String, AbridgedUser>) -> Result<(), String> {
+    let serialized_cache = serde_json::to_string(cache)
+        .map_err(|e| format!("Error serializing cache: {:?}", e))?;
+    fs::write(CACHE_DIR_FILE_PATH.as_path(), serialized_cache)
+        .map_err(|e| format!("Error writing cache to disk: {:?}", e))
+}
+
+/// check a cache entry's creation time to see if it is valid or expired
+fn is_cache_time_valid(cache_time: &DateTime<Utc>) -> bool {
+    let now = Utc::now();
+    let cache_entry_age: Duration = now.signed_duration_since(cache_time.clone());
+    if cache_entry_age > *CACHE_EXPIRY_TIME {
+        // normal cache expiry
+        false
+    } else if cache_entry_age > *CACHE_EXPIRY_TIME_EDGE_CASE && now.date().day() <= 4 {
+        // patreon renewal edge case
+        false
+    } else {
+        true
     }
 }
 
@@ -579,7 +617,7 @@ async fn deserialize_user(response: Response<Body>) -> Result<User, String> {
         .map_err(|e| format!("error parsing user response body: {:?}", e))
 }
 
-fn create_cache_file_path<'a>() -> PathBuf {
+fn create_cache_file_path() -> PathBuf {
     let config_dir_path = app_dirs::get_app_root(AppDataType::UserConfig, &APP_INFO).expect("unable to locate configuration directory");
     fs::create_dir_all(config_dir_path.as_path()).expect("failed to create configuration directory");
     config_dir_path.join("cache.json")
