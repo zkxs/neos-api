@@ -7,7 +7,8 @@ pub struct User {
     pub id: String,
     pub username: String,
     pub normalized_username: String,
-    pub registration_date: String,
+    #[serde(with = "crate::dto::custom_serializer::iso_8601")]
+    pub registration_date: DateTime<Utc>,
     pub is_verified: bool,
     pub quota_bytes: i32,
     pub is_locked: bool,
@@ -62,7 +63,8 @@ pub struct PatreonData {
 /// used for user cache
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AbridgedUser {
-    pub registration_date: String,
+    #[serde(with = "crate::dto::custom_serializer::iso_8601")]
+    pub registration_date: DateTime<Utc>,
     pub is_patron: bool,
     #[serde(with = "crate::dto::custom_serializer::iso_8601")]
     pub cache_time: DateTime<Utc>,

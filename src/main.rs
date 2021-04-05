@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use app_dirs::{AppDataType, AppInfo};
 use bytes::Buf as _;
-use chrono::{Datelike, DateTime, Duration, TimeZone, Utc};
+use chrono::{Datelike, DateTime, Duration, TimeZone, Utc, SecondsFormat};
 use futures::{FutureExt, SinkExt, StreamExt};
 use hyper::{Body, Client, Uri};
 use hyper_tls::HttpsConnector;
@@ -142,6 +142,12 @@ async fn main() {
         .and(warp::get())
         .and_then(userlist_handler);
 
+    // GET /initTimePeek => 200 OK with body "Some(100)"
+    let user_registration = warp::path!("userRegistration" / String)
+        .and(warp::get())
+        .and(with_db(user_cache_db))
+        .and_then(user_registration_handler);
+
     // WEBSOCKET /echo
     let echo = warp::path("echo")
         .and(warp::ws())
@@ -174,6 +180,7 @@ async fn main() {
         .or(init_time_reset)
         .or(init_time_peek)
         .or(systemstat)
+        .or(user_registration)
         .or(sessionlist)
         .or(userlist)
         .or(counter)
@@ -188,6 +195,15 @@ async fn main() {
 
 fn with_db<T: Clone + Send>(db: T) -> impl Filter<Extract=(T, ), Error=std::convert::Infallible> + Clone {
     warp::any().map(move || db.clone())
+}
+
+async fn user_registration_handler(user_id: String, user_cache: UserCacheDb) -> Result<impl warp::Reply, warp::Rejection> {
+    let mut user_cache_mutex = user_cache.lock().await;
+    let user = match lookup_user_cached(&mut user_cache_mutex, user_id).await {
+        Ok(user) => user,
+        Err(e) => return Ok(Response::builder().status(StatusCode::NOT_FOUND).body(e))
+    };
+    Ok(Response::builder().status(StatusCode::OK).body(user.registration_date.to_rfc3339_opts(SecondsFormat::Secs, true)))
 }
 
 async fn userlist_handler() -> Result<impl warp::Reply, warp::Rejection> {
@@ -543,15 +559,7 @@ fn get_system_stat() -> String {
 }
 
 fn format_user_registration_date(user: &AbridgedUser) -> String {
-    match lookup_user_registration_date(user) {
-        Ok(registration_date) => registration_date.date().naive_local().to_string(),
-        Err(error) => error
-    }
-}
-
-fn lookup_user_registration_date(user: &AbridgedUser) -> Result<DateTime<Utc>, String> {
-    user.registration_date.parse::<DateTime<Utc>>()
-        .map_err(|e| format!("parse error: {:?}", e))
+    user.registration_date.date().naive_local().to_string()
 }
 
 async fn lookup_user_cached(cache_mutex: &mut MutexGuard<'_, HashMap<String, AbridgedUser>>, user_id: String) -> Result<AbridgedUser, String> {
