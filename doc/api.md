@@ -51,6 +51,18 @@ runtime
 
 This is a contrived example. Typical outputs will have upwards of 70 lines.
 
+## User Registration Date
+Looks up the IS0-8601 formatted registration date of a user.
+
+**Request:** `GET http://localhost:3030/userRegistration/[user_id]`
+
+**Example Request:** `GET http://localhost:3030/userRegistration/U-runtime`
+
+**Example Response:**
+```
+2020-10-13T19:41:20Z
+```
+
 ## HTTP Test
 Takes a string path parameter and sends it back to you.
 Useless, aside from testing Logix.
