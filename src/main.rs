@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use app_dirs::{AppDataType, AppInfo};
 use bytes::Buf as _;
-use chrono::{Datelike, DateTime, Duration, TimeZone, Utc, SecondsFormat};
+use chrono::{Datelike, DateTime, Duration, TimeZone, Utc, SecondsFormat, Local};
 use futures::{FutureExt, SinkExt, StreamExt};
 use hyper::{Body, Client, Uri};
 use hyper_tls::HttpsConnector;
@@ -559,7 +559,7 @@ fn get_system_stat() -> String {
 }
 
 fn format_user_registration_date(user: &AbridgedUser) -> String {
-    user.registration_date.date().naive_local().to_string()
+    user.registration_date.with_timezone(&Local).date().format("%Y-%m-%d").to_string()
 }
 
 async fn lookup_user_cached(cache_mutex: &mut MutexGuard<'_, HashMap<String, AbridgedUser>>, user_id: String) -> Result<AbridgedUser, String> {
