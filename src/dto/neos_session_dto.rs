@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use chrono::{Utc, DateTime};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,9 +25,11 @@ pub struct Session {
     pub active_users: i32,
     pub max_users: i32,
     pub mobile_friendly: bool,
-    pub session_begin_time: String,
-    pub last_update: String,
-    pub away_since: Option<String>,
+    #[serde(with = "crate::dto::custom_serializer::iso_8601")]
+    pub session_begin_time: DateTime<Utc>,
+    #[serde(with = "crate::dto::custom_serializer::iso_8601")]
+    pub last_update: DateTime<Utc>,
+    pub away_since: Option<String>, // actually an Option<DateTime<Utc>>. but a bitch to deserialize so fuck it
     pub access_level: String,
     pub has_ended: bool,
     pub is_valid: bool,

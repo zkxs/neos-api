@@ -17,7 +17,7 @@ pub struct User {
     pub used_bytes: i32,
     pub profile: Option<Profile>,
     pub patreon_data: Option<PatreonData>,
-    pub tags: Vec<String>,
+    pub tags: Option<Vec<String>>,
 }
 
 impl User {
@@ -28,7 +28,7 @@ impl User {
     pub fn abridge(self, cache_time: DateTime<Utc>) -> AbridgedUser {
         AbridgedUser {
             is_patron: self.is_patron(),
-            is_mentor: self.tags.iter().any(|e| e == "neos mentor"),
+            is_mentor: self.tags.iter().flatten().any(|e| e == "neos mentor"),
             registration_date: self.registration_date,
             cache_time,
         }

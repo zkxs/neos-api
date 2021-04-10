@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use app_dirs::{AppDataType, AppInfo};
 use bytes::Buf as _;
-use chrono::{Datelike, DateTime, Duration, TimeZone, Utc, SecondsFormat, Local};
+use chrono::{Datelike, DateTime, Duration, Utc, SecondsFormat, Local};
 use futures::{FutureExt, SinkExt, StreamExt};
 use hyper::{Body, Client, Uri};
 use hyper_tls::HttpsConnector;
@@ -283,8 +283,7 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
     let current_time = Utc::now();
     let mut session_list_string = Vec::with_capacity(sessions.len());
     for session in sessions.into_iter() {
-        let session_start_time = session.session_begin_time.parse::<DateTime<Utc>>().unwrap_or(Utc.timestamp_millis(0));
-        let uptime = current_time.signed_duration_since(session_start_time);
+        let uptime = current_time.signed_duration_since(session.session_begin_time);
         let user_data_string = match session.host_user_id {
             Some(user_id) => {
                 match lookup_user_cached(&mut user_cache_mutex, user_id).await {
@@ -302,7 +301,7 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
 
         // return a tuple so that we can sort this by an i64 later
         let new_element = (
-            session_start_time.timestamp_millis(),
+            session.session_begin_time.timestamp_millis(),
             format!("{} ({}) ({}/{}) {}:{:02}{}", session.host_username, session.name, session.active_users, session.joined_users, uptime.num_seconds() / 60, uptime.num_seconds() % 60, user_data_string)
         );
         session_list_string.push(new_element);

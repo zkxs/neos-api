@@ -1,7 +1,5 @@
-# Unstable API Documentation
-These APIs are still a work in progress. They **will** be changed without
-notice. This documentation is intended not for API users, but for me to
-keep track of the current API for my testing.
+# Unstable API
+These APIs are still a work in progress. They can and will be changed or removed without notice. This documentation is intended not for API users, but for me to keep track of the current API for my testing.
 
 ## Timestamp Storage
 ```

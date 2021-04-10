@@ -1,14 +1,11 @@
-# API Documentation
+# API
 These APIs are subject to change as this project is still very much a work in progress.
 
 ## New User Session List
 
 Returns a list of sessions that are likely related to new users. Mentors rejoice!
 
-The first character of the response will be `N` if there is a new element
-not present the last time this route was called, otherwise it will be `X`.
-This feature is intended to be used to play a notification sound when a new
-session appears.
+The first character of the response will be `N` if there is a new element not present the last time this route was called, otherwise it will be `X`. This feature is intended to be used to play a notification sound when a new session appears.
 
 **Request:** `GET http://localhost:3030/sessionlist`
 
@@ -29,16 +26,15 @@ Fields, in order of appearance:
 5. Host user registration date
 6. The word "patron" if the host is a patron, otherwise absent
 
+## Session List WebSocket
+Streams session list updates. See the
+[protocol documentation](session_list_api.md) for details.
 
 ## Global Public User List
 
-Outputs a newline-delimited list of all users publicly visible as online.
-This requires them to be in a public session. I am not sure if the Invisible
-status hides users. Headless users are not filtered out.
+Outputs a newline-delimited list of all users publicly visible as online. This requires them to be in a public session. I am not sure if the Invisible status hides users. Headless users are not filtered out.
 
-Unregistered users will have a `?` prefix prepended to their username. If there
-are multiple unregistered users with the same name they will be combined as
-there is no way to distinguish between them.
+Unregistered users will have a `?` prefix prepended to their username. If there are multiple unregistered users with the same name they will be combined as there is no way to distinguish between them.
 
 **Request:** `GET http://localhost:3030/users`
 
@@ -64,8 +60,7 @@ Looks up the IS0-8601 formatted registration date of a user.
 ```
 
 ## HTTP Test
-Takes a string path parameter and sends it back to you.
-Useless, aside from testing Logix.
+Takes a string path parameter and sends it back to you. Useless, aside from testing Logix.
 
 **Request:** `GET http://localhost:3030/hello/[string]`
 
@@ -78,8 +73,7 @@ Hello, foo!
 
 ## WebSocket Test
 
-Two different debug websockets.
-Uselsess, aside from testing logix.
+Two different debug websockets. Useless, aside from testing logix.
 
 ### Echo
 
