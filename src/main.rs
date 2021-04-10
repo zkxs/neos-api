@@ -291,7 +291,8 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
                     Ok(user) => {
                         let registration_date = format!(" {}", format_user_registration_date(&user));
                         let is_patron = (if user.is_patron { " patron" } else { "" }).to_string();
-                        format!("{}{}", registration_date, is_patron)
+                        let is_mentor = (if user.is_mentor { " mentor" } else { "" }).to_string();
+                        format!("{}{}{}", registration_date, is_patron, is_mentor)
                     }
                     Err(err) => format!(" {}", err)
                 }
