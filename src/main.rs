@@ -20,14 +20,27 @@ use warp::Filter;
 use warp::http::{self, Response, StatusCode};
 use warp::hyper::body::Bytes;
 
-use crate::dto::session_dto::Session;
-use crate::dto::user_dto::{AbridgedUser, User};
+use crate::dto::neos_session_dto::Session;
+use crate::dto::neos_user_dto::User;
+use crate::dto::cache_user_dto::AbridgedUser;
 
 mod dto;
 
 type IntegerDb = Arc<Mutex<Option<i64>>>;
-type SessionDb = Arc<Mutex<HashSet<String>>>;
+type SessionDb = Arc<Mutex<HashSet<String>>>; //TODO: must contain a full DTO (probably make it a HashMap<String,DTO>, where String=session_id
+//TODO: Add a SessionConsumersDb
+//TODO: Add a tokio::sync::broadcast to send updates via
 type UserCacheDb = Arc<Mutex<HashMap<String, AbridgedUser>>>;
+
+//TODO: protocol
+//   -> connect:connect_dto // used for metrics?
+//   <- removeAll // sent on new connection
+//   <- remove:session_id
+//   <- add:session_dto
+//   <- update:session_id,active_users,joined_users
+//   <- addUser:session_id,session_user
+//   <- removeUser:session_id,session_user
+
 
 lazy_static! {
     static ref NEOS_SESSION_URI: Uri = "https://www.neosvr-api.com/api/sessions".parse().expect("Could not parse Neos session API URI");

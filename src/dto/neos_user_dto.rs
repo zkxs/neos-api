@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+
+use crate::dto::cache_user_dto::AbridgedUser;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +17,7 @@ pub struct User {
     pub used_bytes: i32,
     pub profile: Option<Profile>,
     pub patreon_data: Option<PatreonData>,
+    pub tags: Vec<String>,
 }
 
 impl User {
@@ -25,6 +28,7 @@ impl User {
     pub fn abridge(self, cache_time: DateTime<Utc>) -> AbridgedUser {
         AbridgedUser {
             is_patron: self.is_patron(),
+            is_mentor: self.tags.iter().any(|e| e == "neos mentor"),
             registration_date: self.registration_date,
             cache_time,
         }
@@ -58,14 +62,4 @@ pub struct PatreonData {
     pub current_account_type: i32,
     pub current_account_cents: i32,
     pub pledged_account_type: i32,
-}
-
-/// used for user cache
-#[derive(Serialize, Deserialize, Clone)]
-pub struct AbridgedUser {
-    #[serde(with = "crate::dto::custom_serializer::iso_8601")]
-    pub registration_date: DateTime<Utc>,
-    pub is_patron: bool,
-    #[serde(with = "crate::dto::custom_serializer::iso_8601")]
-    pub cache_time: DateTime<Utc>,
 }
