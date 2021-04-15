@@ -47,7 +47,7 @@ pub struct PatreonData {
     pub is_patreon_supporter: bool,
     pub last_patreon_pledge_cents: i32,
     pub last_total_cents: i32,
-    pub last_total_units: i32,
+    pub last_total_units: Option<i32>, // this might just be gone from the API forever now
     pub minimum_total_units: i32,
     pub external_cents: i32,
     pub last_external_cents: i32,
