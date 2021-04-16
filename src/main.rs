@@ -2,7 +2,6 @@
 extern crate lazy_static;
 
 use std::{fmt, fs};
-use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -231,8 +230,15 @@ async fn userlist_handler() -> Result<impl warp::Reply, warp::Rejection> {
         Ok(s) => s,
         Err(e) => return Ok(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Error parsing neos session api response: {:?}", e)))
     };
+
+    let headless_host_user_ids = sessions.iter()
+        .filter(|s| s.headless_host)
+        .flat_map(|s| s.host_user_id.clone())
+        .collect::<HashSet<String>>();
+
     let mut users = sessions.into_iter()
         .flat_map(|s| s.session_users.into_iter())
+        .filter(|u| u.user_id.as_ref().map_or(true, |user_id| !headless_host_user_ids.contains(user_id)))
         .map(|u| {
             if u.user_id.is_some() {
                 u.username
@@ -436,7 +442,7 @@ fn option_to_string<T: fmt::Display>(x: Option<T>) -> String {
 
 // bytes --> utf8 string --> i64
 fn bytes_to_i64(bytes: Bytes) -> Result<i64, http::Result<Response<String>>> {
-    let value = match std::str::from_utf8(bytes.borrow()) {
+    let value = match std::str::from_utf8(&bytes) {
         Ok(str) => str,
         Err(utf8_error) => return Err(Response::builder().status(StatusCode::BAD_REQUEST).body(utf8_error.to_string())),
     };
