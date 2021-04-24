@@ -35,6 +35,21 @@ pub struct Session {
     pub is_valid: bool,
 }
 
+impl Session {
+    pub fn headed_users(self) -> Box<dyn Iterator<Item=SessionUser>> {
+        if self.headless_host {
+            let host_user_id = self.host_user_id;
+            let host_username = self.host_username;
+            let iter = self.session_users.into_iter()
+                .filter(move |u| !(host_user_id == u.user_id && host_username == u.username));
+            Box::new(iter)
+        } else {
+            let iter = self.session_users.into_iter();
+            Box::new(iter)
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct World {

@@ -44,8 +44,6 @@ type UserCacheDb = Arc<Mutex<HashMap<String, AbridgedUser>>>;
 lazy_static! {
     static ref NEOS_SESSION_URI: Uri = "https://www.neosvr-api.com/api/sessions".parse().expect("Could not parse Neos session API URI");
     static ref CACHE_DIR_FILE_PATH: PathBuf = create_cache_file_path();
-    /// normal user cache expiry time
-    static ref CACHE_EXPIRY_TIME: Duration = Duration::days(30);
     /// edge case user cache expiry time for when we're at the Patreon renewal time of the month
     static ref CACHE_EXPIRY_TIME_EDGE_CASE: Duration = Duration::hours(6);
 }
@@ -231,14 +229,8 @@ async fn userlist_handler() -> Result<impl warp::Reply, warp::Rejection> {
         Err(e) => return Ok(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Error parsing neos session api response: {:?}", e)))
     };
 
-    let headless_host_user_ids = sessions.iter()
-        .filter(|s| s.headless_host)
-        .flat_map(|s| s.host_user_id.clone())
-        .collect::<HashSet<String>>();
-
     let mut users = sessions.into_iter()
-        .flat_map(|s| s.session_users.into_iter())
-        .filter(|u| u.user_id.as_ref().map_or(true, |user_id| !headless_host_user_ids.contains(user_id)))
+        .flat_map(Session::headed_users)
         .map(|u| {
             if u.user_id.is_some() {
                 u.username
@@ -615,12 +607,11 @@ fn save_cache(cache: &HashMap<String, AbridgedUser>) -> Result<(), String> {
 /// check a cache entry's creation time to see if it is valid or expired
 fn is_cache_time_valid(cache_time: &DateTime<Utc>) -> bool {
     let now = Utc::now();
-    let cache_entry_age: Duration = now.signed_duration_since(cache_time.clone());
-    if cache_entry_age > *CACHE_EXPIRY_TIME {
-        // normal cache expiry
+    if now.year() * 12 + (now.month0() as i32) > cache_time.year() * 12 + (cache_time.month0() as i32) {
+        // normal cache expiry after each month passes
         false
-    } else if cache_entry_age > *CACHE_EXPIRY_TIME_EDGE_CASE && now.date().day() <= 4 {
-        // patreon renewal edge case
+    } else if now.day() <= 4 && now.signed_duration_since(cache_time.clone()) > *CACHE_EXPIRY_TIME_EDGE_CASE {
+        // patreon renewal time edge case
         false
     } else {
         true
