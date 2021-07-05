@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use app_dirs::{AppDataType, AppInfo};
 use bytes::Buf as _;
-use chrono::{Datelike, DateTime, Duration, Utc, SecondsFormat, Local};
-use futures::{FutureExt, SinkExt, StreamExt};
+use chrono::{Datelike, DateTime, Duration, Local, SecondsFormat, Utc};
+use futures::{FutureExt, SinkExt, stream, StreamExt};
 use hyper::{Body, Client, Uri};
 use hyper_tls::HttpsConnector;
 use systemstat::{self, Platform};
@@ -19,9 +19,9 @@ use warp::Filter;
 use warp::http::{self, Response, StatusCode};
 use warp::hyper::body::Bytes;
 
-use crate::dto::neos_session_dto::Session;
-use crate::dto::neos_user_dto::User;
 use crate::dto::cache_user_dto::AbridgedUser;
+use crate::dto::neos_session_dto::{Session, SessionWithHostInfo};
+use crate::dto::neos_user_dto::User;
 
 mod dto;
 
@@ -46,6 +46,7 @@ lazy_static! {
     static ref CACHE_DIR_FILE_PATH: PathBuf = create_cache_file_path();
     /// edge case user cache expiry time for when we're at the Patreon renewal time of the month
     static ref CACHE_EXPIRY_TIME_EDGE_CASE: Duration = Duration::hours(6);
+    static ref NEW_USER_MAX_AGE: Duration = Duration::days(7);
 }
 
 const NEOS_USER_URI: &str = "https://www.neosvr-api.com/api/users/";
@@ -257,18 +258,49 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
         Err(e) => return Ok(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(format!("Error parsing neos session api response: {:?}", e)))
     };
 
-    let sessions = sessions.into_iter()
-        .filter(
-            |s| (WORLD_NAME_PREFIXES.iter().any(|prefix| s.name.starts_with(prefix)))
-                && s.is_valid
-                && !s.has_ended
-                && s.active_users > 0
-                && host_present(s)
-        )
-        .collect::<Vec<Session>>();
+
+    let current_time = Utc::now();
+    let sessions = stream::iter(sessions.into_iter())
+        .filter_map(|session| async {
+            let host_info = match &session.host_user_id {
+                Some(host_user_id) => {
+                    let mut user_cache_mutex = user_cache.lock().await;
+                    match lookup_user_cached(&mut user_cache_mutex, host_user_id.to_owned()).await {
+                        Ok(abridged_user) => Some(abridged_user),
+                        Err(e) => {
+                            eprintln!("Error looking up user {}: {}", host_user_id, e);
+                            None
+                        }
+                    }
+                }
+                None => None
+            };
+
+            let host_is_new: bool = host_info.as_ref().map_or(true, |host_info| {
+                current_time.signed_duration_since(host_info.registration_date) < *NEW_USER_MAX_AGE
+            });
+
+            let noob_session: bool = session.is_valid
+                && !session.has_ended
+                && session.active_users > 0
+                && host_present(&session)
+                && (host_is_new || WORLD_NAME_PREFIXES.iter().any(|prefix| session.name.starts_with(prefix)));
+
+            if noob_session {
+                Some(
+                    SessionWithHostInfo {
+                        session,
+                        host_info,
+                    }
+                )
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<SessionWithHostInfo>>().await;
 
     let new_set = sessions.iter()
-        .map(|s| s.session_id.clone())
+        .map(|s| s.session.session_id.to_owned())
         .collect::<HashSet<String>>();
 
     let mut session_db_mutex = db.lock().await;
@@ -277,22 +309,15 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
     drop(session_db_mutex);
 
 
-    let mut user_cache_mutex = user_cache.lock().await;
-    let current_time = Utc::now();
     let mut session_list_string = Vec::with_capacity(sessions.len());
-    for session in sessions.into_iter() {
+    for SessionWithHostInfo { session, host_info } in sessions.into_iter() {
         let uptime = current_time.signed_duration_since(session.session_begin_time);
-        let user_data_string = match session.host_user_id {
-            Some(user_id) => {
-                match lookup_user_cached(&mut user_cache_mutex, user_id).await {
-                    Ok(user) => {
-                        let registration_date = format!(" {}", format_user_registration_date(&user));
-                        let is_patron = (if user.is_patron { " patron" } else { "" }).to_string();
-                        let is_mentor = (if user.is_mentor { " mentor" } else { "" }).to_string();
-                        format!("{}{}{}", registration_date, is_patron, is_mentor)
-                    }
-                    Err(err) => format!(" {}", err)
-                }
+        let user_data_string = match host_info {
+            Some(host_info) => {
+                let registration_date = format!(" {}", format_user_registration_date(&host_info));
+                let is_patron = (if host_info.is_patron { " patron" } else { "" }).to_string();
+                let is_mentor = (if host_info.is_mentor { " mentor" } else { "" }).to_string();
+                format!("{}{}{}", registration_date, is_patron, is_mentor)
             }
             None => String::new(),
         };
@@ -304,7 +329,6 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
         );
         session_list_string.push(new_element);
     }
-    drop(user_cache_mutex);
 
     // unstable sort is fine as long as no sessions were started in the same millisecond
     session_list_string.sort_unstable_by(|a, b| b.0.cmp(&a.0));

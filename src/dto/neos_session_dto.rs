@@ -1,5 +1,7 @@
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use chrono::{Utc, DateTime};
+
+use crate::dto::cache_user_dto::AbridgedUser;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,4 +67,9 @@ pub struct SessionUser {
     #[serde(rename = "userID")]
     pub user_id: Option<String>,
     pub is_present: bool,
+}
+
+pub struct SessionWithHostInfo {
+    pub session: Session,
+    pub host_info: Option<AbridgedUser>,
 }
