@@ -325,7 +325,7 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
         // return a tuple so that we can sort this by an i64 later
         let new_element = (
             session.session_begin_time.timestamp_millis(),
-            format!("{} ({}) ({}/{}) {}:{:02}{}", session.host_username, session.name, session.active_users, session.joined_users, uptime.num_seconds() / 60, uptime.num_seconds() % 60, user_data_string)
+            format!("{} ({}</closeall>) ({}/{}) {}:{:02}{}", session.host_username, session.name, session.active_users, session.joined_users, uptime.num_seconds() / 60, uptime.num_seconds() % 60, user_data_string)
         );
         session_list_string.push(new_element);
     }
