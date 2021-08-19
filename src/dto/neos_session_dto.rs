@@ -6,7 +6,7 @@ use crate::dto::cache_user_dto::AbridgedUser;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Session {
-    pub name: String,
+    pub name: Option<String>,
     pub description: Option<String>,
     pub corresponding_world_id: Option<World>,
     pub tags: Vec<String>,

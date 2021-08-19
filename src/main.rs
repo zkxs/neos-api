@@ -284,7 +284,7 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
                 && !session.has_ended
                 && session.active_users > 0
                 && host_present(&session)
-                && (host_is_new || WORLD_NAME_PREFIXES.iter().any(|prefix| session.name.starts_with(prefix)));
+                && (host_is_new || WORLD_NAME_PREFIXES.iter().any(|prefix| session.name.as_ref().map(|s| s.starts_with(prefix)).unwrap_or(false)));
 
             if noob_session {
                 Some(
@@ -325,7 +325,7 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
         // return a tuple so that we can sort this by an i64 later
         let new_element = (
             session.session_begin_time.timestamp_millis(),
-            format!("{} ({}</closeall>) ({}/{}) {}:{:02}{}", session.host_username, session.name, session.active_users, session.joined_users, uptime.num_seconds() / 60, uptime.num_seconds() % 60, user_data_string)
+            format!("{} ({}<b></closeall>) ({}/{}) {}:{:02}{}", session.host_username, session.name.as_ref().map(|s| s.as_str()).unwrap_or(""), session.active_users, session.joined_users, uptime.num_seconds() / 60, uptime.num_seconds() % 60, user_data_string)
         );
         session_list_string.push(new_element);
     }
