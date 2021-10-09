@@ -22,6 +22,7 @@ use warp::hyper::body::Bytes;
 use crate::dto::cache_user_dto::AbridgedUser;
 use crate::dto::neos_session_dto::{Session, SessionWithHostInfo};
 use crate::dto::neos_user_dto::User;
+use crate::dto::neos_user_status_dto::UserStatus;
 
 mod dto;
 
@@ -50,6 +51,7 @@ lazy_static! {
 }
 
 const NEOS_USER_URI: &str = "https://www.neosvr-api.com/api/users/";
+const NEOS_USER_STATUS_URI_SUFFIX: &str = "/status";
 
 // world IDs change on republish, so we'll just stick with name checking for now
 const WORLD_NAME_PREFIXES: [&str; 5] = [
@@ -314,10 +316,17 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
         let uptime = current_time.signed_duration_since(session.session_begin_time);
         let user_data_string = match host_info {
             Some(host_info) => {
+                let host_user_id = &session.host_user_id.expect("if we have an AbridgedUser we should have a user id");
+                let user_status = lookup_user_status(host_user_id).await;
+
                 let registration_date = format!(" {}", format_user_registration_date(&host_info));
                 let is_patron = (if host_info.is_patron { " patron" } else { "" }).to_string();
                 let is_mentor = (if host_info.is_mentor { " mentor" } else { "" }).to_string();
-                format!("{}{}{}", registration_date, is_patron, is_mentor)
+                let output_device = match user_status {
+                    Ok(status) => format!(" {}", status.output_device),
+                    Err(_) => String::new(),
+                };
+                format!("{}{}{}{}", registration_date, is_patron, is_mentor, output_device)
             }
             None => String::new(),
         };
@@ -657,6 +666,23 @@ async fn deserialize_user(response: Response<Body>) -> Result<User, String> {
         .map_err(|e| format!("error aggregating user response body: {:?}", e))?;
     serde_json::from_reader(body.reader())
         .map_err(|e| format!("error parsing user response body: {:?}", e))
+}
+
+async fn lookup_user_status(user_id: &str) -> Result<UserStatus, String> {
+    let uri: Uri = format!("{}{}{}", NEOS_USER_URI, user_id, NEOS_USER_STATUS_URI_SUFFIX).parse()
+        .map_err(|e| format!("Could not parse Neos user status API URI: {:?}", e))?;
+    let https = HttpsConnector::new();
+    let client = Client::builder().build::<_, hyper::Body>(https);
+    let response: Response<Body> = client.get(uri).await
+        .map_err(|e| format!("Could not read Neos user status API response body: {:?}", e))?;
+    deserialize_user_status(response).await
+}
+
+async fn deserialize_user_status(response: Response<Body>) -> Result<UserStatus, String> {
+    let body = hyper::body::aggregate(response).await
+        .map_err(|e| format!("error aggregating userstatus response body: {:?}", e))?;
+    serde_json::from_reader(body.reader())
+        .map_err(|e| format!("error parsing userstatus response body: {:?}", e))
 }
 
 fn create_cache_file_path() -> PathBuf {
