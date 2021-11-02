@@ -241,7 +241,7 @@ async fn userlist_handler() -> Result<impl warp::Reply, warp::Rejection> {
                 format!("?{}", u.username)
             }
         }).collect::<Vec<String>>();
-    users.sort_unstable();
+    users.sort_unstable_by_key(|username| username.to_lowercase());
     users.dedup();
     let user_list = users.join("\n");
     Ok(Response::builder().status(StatusCode::OK).body(user_list))
