@@ -43,14 +43,14 @@ type UserCacheDb = Arc<Mutex<HashMap<String, AbridgedUser>>>;
 
 
 lazy_static! {
-    static ref NEOS_SESSION_URI: Uri = "https://www.neosvr-api.com/api/sessions".parse().expect("Could not parse Neos session API URI");
+    static ref NEOS_SESSION_URI: Uri = "https://api.neos.com/api/sessions".parse().expect("Could not parse Neos session API URI");
     static ref CACHE_DIR_FILE_PATH: PathBuf = create_cache_file_path();
     /// edge case user cache expiry time for when we're at the Patreon renewal time of the month
     static ref CACHE_EXPIRY_TIME_EDGE_CASE: Duration = Duration::hours(6);
     static ref NEW_USER_MAX_AGE: Duration = Duration::days(7);
 }
 
-const NEOS_USER_URI: &str = "https://www.neosvr-api.com/api/users/";
+const NEOS_USER_URI: &str = "https://api.neos.com/api/users/";
 const NEOS_USER_STATUS_URI_SUFFIX: &str = "/status";
 
 // world IDs change on republish, so we'll just stick with name checking for now
