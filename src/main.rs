@@ -7,9 +7,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use app_dirs::{AppDataType, AppInfo};
 use bytes::Buf as _;
 use chrono::{Datelike, DateTime, Duration, Local, SecondsFormat, Utc};
+use directories::ProjectDirs;
 use futures::{FutureExt, SinkExt, stream, StreamExt};
 use hyper::{Body, Client, Uri};
 use hyper_tls::HttpsConnector;
@@ -61,11 +61,6 @@ const WORLD_NAME_PREFIXES: [&str; 5] = [
     "The Avatar Station",
     "Training"
 ];
-
-const APP_INFO: AppInfo = AppInfo {
-    name: env!("CARGO_PKG_NAME"),
-    author: "runtime",
-};
 
 #[tokio::main]
 async fn main() {
@@ -686,7 +681,10 @@ async fn deserialize_user_status(response: Response<Body>) -> Result<UserStatus,
 }
 
 fn create_cache_file_path() -> PathBuf {
-    let config_dir_path = app_dirs::get_app_root(AppDataType::UserConfig, &APP_INFO).expect("unable to locate configuration directory");
+    let config_dir_path: PathBuf = ProjectDirs::from("dev.zkxs", "runtime", env!("CARGO_PKG_NAME"))
+        .expect("unable to locate configuration directory")
+        .config_dir()
+        .into();
     fs::create_dir_all(config_dir_path.as_path()).expect("failed to create configuration directory");
     config_dir_path.join("cache.json")
 }
