@@ -1,6 +1,6 @@
 [package]
 name = "neos-api"
-version = "0.8.0"
+version = "0.7.0"
 authors = ["Michael Ripley <zkxs00@gmail.com>"]
 edition = "2018"
 
