@@ -130,7 +130,7 @@ async fn main() {
     // GET /counter => 200 OK with body "Some(0)"
     let counter = warp::path("counter")
         .and(warp::get())
-        .and(with_db(counter_db).clone())
+        .and(with_db(counter_db))
         .and_then(counter_handler);
 
     // GET /systemstat => 200 OK with body containing many system stats
@@ -329,7 +329,7 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
         // return a tuple so that we can sort this by an i64 later
         let new_element = (
             session.session_begin_time.timestamp_millis(),
-            format!("{} ({}<b></closeall>) ({}/{}) {}:{:02}{}", session.host_username, session.name.as_ref().map(|s| s.as_str()).unwrap_or(""), session.active_users, session.joined_users, uptime.num_seconds() / 60, uptime.num_seconds() % 60, user_data_string)
+            format!("{} ({}<b></closeall>) ({}/{}) {}:{:02}{}", session.host_username, session.name.as_deref().unwrap_or(""), session.active_users, session.joined_users, uptime.num_seconds() / 60, uptime.num_seconds() % 60, user_data_string)
         );
         session_list_string.push(new_element);
     }
@@ -354,9 +354,9 @@ async fn sessionlist_handler(db: SessionDb, user_cache: UserCacheDb) -> Result<i
 fn host_present(session: &Session) -> bool {
     let users = &session.session_users;
     if session.host_user_id.is_some() {
-        users.into_iter().any(|u| u.is_present && u.user_id == session.host_user_id)
+        users.iter().any(|u| u.is_present && u.user_id == session.host_user_id)
     } else {
-        users.into_iter().any(|u| u.is_present && u.username == session.host_username)
+        users.iter().any(|u| u.is_present && u.username == session.host_username)
     }
 }
 
@@ -455,7 +455,7 @@ async fn counter_handler(db: Arc<Mutex<Option<i64>>>) -> Result<impl warp::Reply
 // convert an option to a pretty string
 fn option_to_string<T: fmt::Display>(x: Option<T>) -> String {
     match x {
-        Some(value) => format!("Some({})", value.to_string()),
+        Some(value) => format!("Some({})", value),
         None => "None".to_string(),
     }
 }
@@ -500,14 +500,14 @@ fn get_system_stat() -> String {
             }
             string
         }
-        Err(x) => format!("Block devices: error: {}", x.to_string())
+        Err(x) => format!("Block devices: error: {}", x)
     };
 
     let networks = match sys.networks() {
-        Ok(netifs) => {
+        Ok(net_ifs) => {
             let mut string = String::from("Networks:");
-            for netif in netifs.values() {
-                string.push_str(format!("\n    {} ({:?})", netif.name, netif.addrs).as_str());
+            for net_if in net_ifs.values() {
+                string.push_str(format!("\n    {} ({:?})", net_if.name, net_if.addrs).as_str());
             }
             string
         }
@@ -577,7 +577,7 @@ fn get_system_stat() -> String {
 
     let socket_stats = match sys.socket_stats() {
         Ok(stats) => format!("System socket statistics: {:?}", stats),
-        Err(x) => format!("System socket statistics: error: {}", x.to_string())
+        Err(x) => format!("System socket statistics: error: {}", x)
     };
 
     format!(
@@ -635,15 +635,12 @@ fn save_cache(cache: &HashMap<String, AbridgedUser>) -> Result<(), String> {
 /// check a cache entry's creation time to see if it is valid or expired
 fn is_cache_time_valid(cache_time: &DateTime<Utc>) -> bool {
     let now = Utc::now();
-    if now.year() * 12 + (now.month0() as i32) > cache_time.year() * 12 + (cache_time.month0() as i32) {
-        // normal cache expiry after each month passes
-        false
-    } else if now.day() <= 4 && now.signed_duration_since(cache_time.clone()) > *CACHE_EXPIRY_TIME_EDGE_CASE {
-        // patreon renewal time edge case
-        false
-    } else {
-        true
-    }
+
+    // check the two expiry conditions
+    !(
+        (now.year() * 12 + (now.month0() as i32) > cache_time.year() * 12 + (cache_time.month0() as i32)) // normal cache expiry after each month passes
+        || (now.day() <= 4 && now.signed_duration_since(cache_time.to_owned()) > *CACHE_EXPIRY_TIME_EDGE_CASE) // patreon renewal time edge case
+    )
 }
 
 async fn lookup_user(user_id: &str) -> Result<User, String> {
